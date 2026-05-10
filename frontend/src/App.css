@@ -5,6 +5,8 @@
   overflow: hidden;
 }
 
+.app.is-dragging {
+  display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   cursor: grabbing;
   transition: background-color 140ms ease, color 140ms ease;
@@ -46,13 +48,16 @@
   flex: 1 1 auto;
 }
 
+/* FIXED SECOND BROKEN BLOCK */
 .app.is-dragging .workspace,
 .app.is-dragging .landing,
 .app.is-dragging .app-grid,
-.app.is-dragging .topbar,
+.app.is-dragging .topbar {
   max-width: 42%;
   flex: 0 1 42%;
   min-width: 0;
+}
+
 .app.is-dragging .chat-box,
 .app.is-dragging .notes-panel,
 .app.is-dragging .modal,
