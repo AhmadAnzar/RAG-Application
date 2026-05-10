@@ -1,0 +1,32 @@
+# Environment files
+.env
+backend/.env
+frontend/.env
+frontend/.env.*
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+
+# Node / frontend builds
+frontend/node_modules/
+frontend/dist/
+
+# Generated or local artifacts
+sample-upload.pdf
+*.tmp
+*.temp
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
