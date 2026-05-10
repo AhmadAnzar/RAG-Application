@@ -27,7 +27,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 def _load_env_file(path: str = ".env"):
     try:
         with open(path, "r", encoding="utf-8") as env_file:
@@ -40,10 +39,19 @@ def _load_env_file(path: str = ".env"):
     except FileNotFoundError:
         pass
 
-
 _load_env_file()
 
-embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+embeddings = None
+
+def _get_embeddings():
+    global embeddings
+    if embeddings is None:
+        print("Loading embeddings model...")
+        embeddings = HuggingFaceEmbeddings(
+            model_name="sentence-transformers/all-MiniLM-L6-v2"
+        )
+        print("Embeddings model loaded.")
+    return embeddings
 
 if not os.environ.get("GITHUB_TOKEN"):
     print("Warning: GITHUB_TOKEN is missing.")
@@ -76,13 +84,6 @@ def _get_qdrant_client():
         if not QDRANT_URL or not QDRANT_API_KEY:
             raise RuntimeError("QDRANT_URL and QDRANT_API_KEY are required.")
         qdrant_client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
-        VECTOR_SIZE = len(embeddings.embed_query("vector-size-probe"))
-        existing_collections = qdrant_client.get_collections().collections
-        if not any(collection.name == QDRANT_COLLECTION for collection in existing_collections):
-            qdrant_client.create_collection(
-                collection_name=QDRANT_COLLECTION,
-                vectors_config=VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE),
-            )
     return qdrant_client
 
 class QueryRequest(BaseModel):
@@ -91,17 +92,14 @@ class QueryRequest(BaseModel):
 class TextUploadRequest(BaseModel):
     text: str
 
-
 def _load_csv_documents(file_path: str, source_name: str):
     with open(file_path, "r", encoding="utf-8-sig", newline="") as csv_file:
         sample = csv_file.read(4096)
         csv_file.seek(0)
-
         try:
             dialect = csv.Sniffer().sniff(sample) if sample.strip() else csv.excel
         except csv.Error:
             dialect = csv.excel
-
         try:
             has_header = csv.Sniffer().has_header(sample) if sample.strip() else False
         except csv.Error:
@@ -131,7 +129,6 @@ def _load_csv_documents(file_path: str, source_name: str):
                             metadata={"source": source_name, "row_number": row_index},
                         )
                     )
-
     return documents
 
 def _index_documents(docs, source_name: str, upload_type: str):
@@ -142,8 +139,25 @@ def _index_documents(docs, source_name: str, upload_type: str):
     if not chunks:
         return 0
 
+    client = _get_qdrant_client()
+
+    try:
+        client.delete_collection(collection_name=QDRANT_COLLECTION)
+    except Exception:
+        pass
+
+    client.create_collection(
+        collection_name=QDRANT_COLLECTION,
+        vectors_config=VectorParams(
+            size=len(_get_embeddings().embed_query("vector-size-probe")),
+            distance=Distance.COSINE,
+        ),
+    )
+
     chunk_texts = [doc.page_content for doc in chunks]
-    chunk_vectors = embeddings.embed_documents(chunk_texts)
+    print("Creating embeddings...")
+    chunk_vectors = _get_embeddings().embed_documents(chunk_texts)
+    print("Embeddings created.")
 
     points = []
     for index, (chunk, vector) in enumerate(zip(chunks, chunk_vectors)):
@@ -153,7 +167,6 @@ def _index_documents(docs, source_name: str, upload_type: str):
             "upload_type": upload_type,
             "chunk_index": index,
         }
-
         for key, value in (chunk.metadata or {}).items():
             if isinstance(value, (str, int, float, bool)):
                 payload[f"meta_{key}"] = value
@@ -166,10 +179,8 @@ def _index_documents(docs, source_name: str, upload_type: str):
             )
         )
 
-    client = _get_qdrant_client()
     client.upsert(collection_name=QDRANT_COLLECTION, points=points, wait=True)
     return len(chunks)
-
 
 def _search_qdrant(query_vector, top_k: int):
     client = _get_qdrant_client()
@@ -183,7 +194,6 @@ def _search_qdrant(query_vector, top_k: int):
 
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
-    # Write upload to a secure system temp file (do NOT use working dir or user-supplied name)
     tmp_file = None
     try:
         suffix = os.path.splitext(file.filename)[1] if file.filename else ".pdf"
@@ -193,10 +203,8 @@ async def upload_file(file: UploadFile = File(...)):
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tf:
             tmp_file = tf.name
-            # stream copy to temp file
             shutil.copyfileobj(file.file, tf)
 
-        # Ingestion from temp path
         if normalized_suffix == ".csv":
             docs = _load_csv_documents(tmp_file, source_name=os.path.basename(file.filename) or "uploaded.csv")
             upload_type = "csv"
@@ -208,20 +216,17 @@ async def upload_file(file: UploadFile = File(...)):
         total_chunks = _index_documents(docs, source_name=os.path.basename(file.filename) or "uploaded.file", upload_type=upload_type)
 
         return {
-            "message": "File ingested, chunked, embedded, and indexed.",
+            "message": "File ingested and collection reset.",
             "total_chunks": total_chunks,
         }
     except Exception as e:
-        # Provide a clearer error to the client and log server-side
         raise HTTPException(status_code=500, detail=f"Upload processing failed: {e}")
     finally:
-        # Always attempt to clean up the temp file
         try:
             if tmp_file and os.path.exists(tmp_file):
                 os.remove(tmp_file)
         except Exception:
             pass
-
 
 @app.post("/upload-text")
 async def upload_text(payload: TextUploadRequest):
@@ -232,14 +237,13 @@ async def upload_text(payload: TextUploadRequest):
     docs = [Document(page_content=text, metadata={"source": "clipboard-text"})]
     total_chunks = _index_documents(docs, source_name="clipboard-text", upload_type="text")
     return {
-        "message": "Text ingested, chunked, embedded, and indexed.",
+        "message": "Text ingested and collection reset.",
         "total_chunks": total_chunks,
     }
 
 @app.post("/query")
 async def query_document(req: QueryRequest):
-    # Retrieval step (top-k from Qdrant)
-    query_vector = embeddings.embed_query(req.query)
+    query_vector = _get_embeddings().embed_query(req.query)
     try:
         search_result = _search_qdrant(query_vector, TOP_K)
     except Exception as e:
@@ -266,37 +270,25 @@ async def query_document(req: QueryRequest):
     if not searched_chunks:
         return {"answer": "No relevant information found. Try a better question."}
     
-    # Compile the retrieved context
     context = "\n\n".join(searched_chunks)
-    
-    # Build the system prompt with context
     system_prompt = RAG_SYSTEM_PROMPT.format(
         instructions=f"DOCUMENT CONTEXT:\n{context}\n\nUser Query: {req.query}\n\nProvide a concise answer in 2-5 sentences."
     )
     
     messages = [
         SystemMessage(content=system_prompt),
-        HumanMessage(
-            content=f"Query: {req.query}"
-        ),
+        HumanMessage(content=f"Query: {req.query}"),
     ]
 
-    # Generation step
     try:
-        try:
-            llm_instance = _get_llm()
-        except RuntimeError as e:
-            raise HTTPException(status_code=500, detail=str(e))
-
+        llm_instance = _get_llm()
         response = llm_instance.invoke(messages)
     except BadRequestError as error:
-        error_message = str(error)
-        if "content_filter" in error_message or "ResponsibleAIPolicyViolation" in error_message:
-            return {
-                "answer": "The backend blocked this request.",
-                "source_chunks": searched_chunks,
-            }
+        if "content_filter" in str(error):
+            return {"answer": "The backend blocked this request.", "source_chunks": searched_chunks}
         raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
     
     return {
         "answer": response.content.strip(),
