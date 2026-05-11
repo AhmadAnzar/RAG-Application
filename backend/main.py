@@ -56,32 +56,10 @@ def _voyage_api_request(payload: dict):
 
 @app.on_event("startup")
 def _startup_checks():
-    import urllib.parse
     voyage_url = os.environ.get("VOYAGE_API_URL", "https://api.voyageai.com/v1/embeddings")
     print(f"Voyage endpoint configured: {voyage_url}")
     api_key_set = bool(os.environ.get("VOYAGE_API_KEY"))
     print(f"VOYAGE_API_KEY set: {api_key_set}")
-
-    try:
-        parsed = urllib.parse.urlparse(voyage_url)
-        host = parsed.hostname
-        port = parsed.port or (443 if parsed.scheme == "https" else 80)
-        try:
-            addrs = [ai[4][0] for ai in __import__("socket").getaddrinfo(host, port)]
-            unique_addrs = sorted(set(addrs))
-            print(f"DNS resolution for {host}: {unique_addrs}")
-        except Exception as dns_e:
-            print(f"DNS resolution failed for {host}: {dns_e}")
-
-        # Lightweight connectivity check
-        import requests
-        try:
-            resp = requests.head(voyage_url, timeout=5)
-            print(f"Connectivity check to Voyage endpoint: status={resp.status_code}")
-        except Exception as conn_e:
-            print(f"Voyage connectivity check failed: {conn_e}")
-    except Exception as e:
-        print(f"Startup diagnostics failed: {e}")
 
 
 def get_embedding(text: str):
@@ -371,3 +349,10 @@ async def query_document(req: QueryRequest):
         "answer": response.content.strip(),
         "source_chunks": searched_chunks
     }
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    port = int(os.environ.get("PORT", "10000"))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
