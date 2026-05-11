@@ -46,8 +46,6 @@ def _voyage_api_request(payload: dict):
     if not api_key:
         raise RuntimeError("VOYAGE_API_KEY is not set in the environment.")
 
-    # Use the officially documented Voyage AI embeddings endpoint by default.
-    # Official docs indicate: POST https://api.voyageai.com/v1/embeddings
     url = os.environ.get("VOYAGE_API_URL", "https://api.voyageai.com/v1/embeddings")
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
@@ -58,14 +56,6 @@ def _voyage_api_request(payload: dict):
 
 @app.on_event("startup")
 def _startup_checks():
-    """Print diagnostic info about the Voyage endpoint and basic connectivity.
-
-    This runs at application startup and logs:
-    - The endpoint being used
-    - Whether `VOYAGE_API_KEY` is set
-    - DNS resolution result (addresses) for the endpoint host
-    - A lightweight connectivity check (HEAD request) and concise error if it fails
-    """
     import urllib.parse
     voyage_url = os.environ.get("VOYAGE_API_URL", "https://api.voyageai.com/v1/embeddings")
     print(f"Voyage endpoint configured: {voyage_url}")
@@ -101,7 +91,6 @@ def get_embedding(text: str):
     payload = {"model": "voyage-2", "input": text}
     data = _voyage_api_request(payload)
 
-    # Try common response shapes: {data:[{embedding: [...]}, ...]} or {embedding: [...]}
     if isinstance(data, dict) and "data" in data and isinstance(data["data"], list):
         first = data["data"][0]
         if isinstance(first, dict) and "embedding" in first:
